@@ -1,0 +1,3 @@
+[submodule "goscon"]
+	path = goscon
+	url = https://github.com/ejoy/goscon.git

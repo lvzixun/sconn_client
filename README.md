@@ -7,7 +7,7 @@ API如下：
 ~~~.lua
 local conn = require "conn"
 
-local sock = conn.connect_host(addr, port) -- 网络连接
+local sock = conn.connect_host(host, port) -- 网络连接
 
 local success, err = sock:update() -- 更新状态
 sock:close() -- 关闭连接

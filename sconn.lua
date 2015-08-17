@@ -420,7 +420,7 @@ function mt:close()
 end
 
 return {
-    connect = connect,
+    connect_host = connect,
 }
 
 

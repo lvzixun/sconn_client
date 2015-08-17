@@ -1,4 +1,3 @@
-local print_r = require "print_r"
 local socket = require "socket.c"
 local buffer_queue = require "buffer_queue"
 

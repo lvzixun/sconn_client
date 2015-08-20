@@ -42,16 +42,18 @@ local function dispatch(self, resp)
     -- print("dispatch:", _type, v1, v2, v3)
     if _type == "RESPONSE" then
         local session, response = v1, v2
-        local handle = self.v_request_session[session]
+        local session_item = self.v_request_session[session]
+        local handle = session_item.handle
         local tt  = type(handle)
         if tt == "function" then
             handle(response)
         elseif tt == "thread" then
             coroutine.resume(handle, response)
         else
-            error("error handle type:"..tt)
+            error("error handle type:"..tt.." from msg:"..tostring(session_item.name))
         end
         self.v_request_session[session] = nil
+
     elseif _type == "REQUEST" then
         local name, request, response = v1, v2, v3
         local handle = self.v_response_handle[name]
@@ -96,12 +98,17 @@ function mt:call(name, t, cb)
     self.v_session_index = session_index + 1
 
     assert(self.v_request_session[session_index]==nil, session_index)
+    local session_item = {
+        name = name,
+        handle = false,
+    }
+    self.v_request_session[session_index] = session_item
+
     if cb then
-        self.v_request_session[session_index] = cb
+        session_item.handle = cb
         request(self, name, t, session_index)
     elseif coroutine.isyieldable() then
-        local co = coroutine.running()
-        self.v_request_session[session_index] = co
+        session_item.handle = coroutine.running()
         request(self, name, t, session_index)
         return coroutine.yield()
     else

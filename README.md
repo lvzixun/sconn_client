@@ -27,3 +27,7 @@ local count = sock:recv_msg(out_msg [, header_len[, endian]]) -- 根据包头读
 [`sconn.lua`](https://github.com/lvzixun/sconn_client/blob/master/sconn.lua)
 根据[gosconn](https://github.com/ejoy/goscon)协议实现的断线重连模块。
 api与`conn.lua`一致，只是多了`sock:reconnect()`接口。
+
+
+### network
+[`network.lua`](https://github.com/lvzixun/sconn_client/blob/master/network.lua)为sproto协议实现的一个客户端网络模块。

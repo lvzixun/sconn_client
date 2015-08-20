@@ -1,3 +1,6 @@
 [submodule "goscon"]
 	path = goscon
 	url = https://github.com/ejoy/goscon.git
+[submodule "sproto"]
+	path = sproto
+	url = https://github.com/cloudwu/sproto.git

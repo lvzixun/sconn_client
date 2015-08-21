@@ -32,7 +32,13 @@ end
 
 function mt:connect(host, port)
     self.v_request_session = {}
-    self.v_conn = conn.connect_host(host, port)
+    local obj, errcode = conn.connect_host(host, port)
+    if not obj then
+        return false, errcode
+    else
+        self.v_conn = obj
+        return true
+    end
 end
 
 

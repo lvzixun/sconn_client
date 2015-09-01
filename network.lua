@@ -54,7 +54,10 @@ local function dispatch(self, resp)
         if tt == "function" then
             handle(response)
         elseif tt == "thread" then
-            coroutine.resume(handle, response)
+            local success, err = coroutine.resume(handle, response)
+            if not success then
+                error(err)
+            end
         else
             error("error handle type:"..tt.." from msg:"..tostring(session_item.name))
         end

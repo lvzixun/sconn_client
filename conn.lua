@@ -98,7 +98,7 @@ local function _flush_recv(self)
                 return false, socket.strerror(err)
             end
         elseif #data == 0 then
-            return false or "connect_break"
+            return false, "connect_break"
         else
             local len = #data
             count = count + len

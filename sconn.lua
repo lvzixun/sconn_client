@@ -137,8 +137,6 @@ end
 local out = {}
 
 -------------- new connect state ------------------
-local send_buf = {}
-local send_buf_top = 0
 function state.newconnect.request(self)
     -- 0\n
     -- base64(DH_key)\n
@@ -151,13 +149,13 @@ function state.newconnect.request(self)
     self.v_sock:send(data)
     self.v_clientkey = clientkey
     log("request:", data)
-    send_buf_top = 0
+    self.v_send_buf_top = 0
 end
 
 
 function state.newconnect.send(self, data)
-    send_buf_top = send_buf_top + 1
-    send_buf[send_buf_top] = data
+    self.v_send_buf_top = self.v_send_buf_top + 1
+    self.v_send_buf[self.v_send_buf_top] = data
 end
 
 
@@ -189,10 +187,10 @@ function state.newconnect.dispatch(self)
     switch_state(self, "forward")
 
     -- 发送在新连接建立中间缓存的数据包
-    for i=1,send_buf_top do
-        self:send(send_buf[i])
+    for i=1,self.v_send_buf_top do
+        self:send(self.v_send_buf[i])
     end
-    send_buf_top = 0
+    self.v_send_buf_top = 0
 end
 
 
@@ -259,7 +257,7 @@ function state.reconnect.dispatch(self)
         local data = self.v_cache:pop(nbytes)
         -- 缓存的数据不足
         if not data then
-            switch_state("reconnect_cache_error")
+            switch_state(self, "reconnect_cache_error")
         else
             assert(#data == nbytes)
             self.v_sock:send(data)
@@ -320,6 +318,9 @@ local function connect(host, port)
         v_reconnect_index = 0,
         v_cache = cache_create(),
 
+        v_send_buf = {},
+        v_send_buf_top = 0,
+
         v_recv_buf = buffer_queue.create(),
         v_dispatch = _newconnect_dispatch,
         v_send = _newconnect_send,
@@ -336,10 +337,13 @@ local function connect(host, port)
     return self
 end
 
+function mt:cur_state()
+    return self.v_state.name
+end
 
 function mt:reconnect()
     local state_name = self.v_state.name
-    if state_name ~= "forward" then
+    if state_name ~= "forward" and state_name ~= "reconnect" then
         return false, string.format("error state switch `%s` to reconnect", state_name)
     end
 
@@ -365,16 +369,16 @@ function mt:update()
     if name == "reconnect_error" or 
        name == "reconnect_match_error" or 
        name == "reconnect_cache_error" then
-        return false, state.name
+        return false, state.name, "reconnect"
     end
 
-    local success, err = sock:update()
+    local success, err, status = sock:update()
     local dispatch = state.dispatch
     if success and dispatch then
         dispatch(self)
     end
 
-    return success ,err
+    return success ,err, status
 end
 
 

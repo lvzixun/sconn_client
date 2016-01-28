@@ -13,11 +13,14 @@ local DEF_MSG_ENDIAN = "little"
 
 local mt = {}
 
+local function conn_error(errcode)
+    return socket.strerror(errcode).."["..tostring(errcode).."]"
+end
 
 local function resolve(host)
     local addr_tbl, err = socket.resolve(host)
     if not addr_tbl then
-        return false, socket.gai_strerror(err)
+        return false, socket.gai_strerror(err).."["..tostring(err).."]"
     end
     return assert(addr_tbl[1])
 end
@@ -29,6 +32,7 @@ local function connect(addr, port)
 
     local errcode = fd:connect(addr.addr, port)
     if errcode == OK or
+       errcode == EAGAIN or
        errcode == EINPROGRESS or
        errcode == EINTR or 
        errcode == EISCONN  then
@@ -42,7 +46,7 @@ local function connect(addr, port)
        }
        return setmetatable(raw, {__index = mt})
    else
-        return nil, socket.strerror(errcode)
+        return nil, conn_error(errcode)
    end
 end
 
@@ -56,7 +60,6 @@ local function connect_host(host, port)
     return connect(addr, port)
 end
 
-
 local function _flush_send(self)
     local send_buf = self.v_send_buf
     local v = send_buf:get_head_data()
@@ -67,7 +70,7 @@ local function _flush_send(self)
         local len = #v
         local n, err = fd:send(v)
         if not n then
-            return false, socket.strerror(err)
+            return false, conn_error(err)
         else
             count = count + n
             send_buf:pop(n)
@@ -90,12 +93,12 @@ local function _flush_recv(self)
     ::CONTINUE::
         local data, err = fd:recv()
         if not data then
-            if err == EAGAIN then
+            if err == EAGAIN or err == 0 then
                 return true
             elseif err == EINTR then
                 goto CONTINUE
             else
-                return false, socket.strerror(err)
+                return false, conn_error(err)
             end
         elseif #data == 0 then
             return false, "connect_break"
@@ -114,7 +117,7 @@ local function _check_connect(self)
     local fd = self.v_fd
     local success, err = fd:check_async_connect()
     if not success then
-        return false, err and socket.strerror(err) or "connecting"
+        return false, err and conn_error(err) or "connecting"
     else
         return true
     end
@@ -158,28 +161,29 @@ end
 function mt:update()
     local success, err = _check_connect(self)
     if not success then
-        return false, err
+        return false, err, "connect"
     end
 
     success, err = _flush_send(self)
     if not success then
-        return false, err
+        return false, err, "send"
     end
 
     success, err = _flush_recv(self)
     if not success then
-        return false, err
+        return false, err, "recv"
     end
 
     return true
 end
 
 
-function mt:new_connect(addr, port)
-    self.v_fd:close()
-    self.v_recv_buf:clear()
-    self.v_send_buf:clear()
+function mt:getsockname()
+    return self.v_fd:getsockname()
+end
 
+
+function mt:new_connect(addr, port)
     local fd = socket.socket(addr.family, socket.SOCK_STREAM, 0)
     fd:setblocking(false)
 
@@ -188,12 +192,15 @@ function mt:new_connect(addr, port)
        errcode == EINPROGRESS or
        errcode == EINTR or 
        errcode == EISCONN  then
+       self.v_fd:close()
+       self.v_recv_buf:clear()
+       self.v_send_buf:clear()
        self.v_fd = fd
        self.o_host_addr = addr
        self.o_port = port
        return true
     else
-        return false, socket.strerror(errcode)
+        return false, conn_error(errcode)
     end
 end
 
@@ -204,8 +211,7 @@ end
 
 
 return {
-    resolve =resolve,
+    resolve = resolve,
     connect = connect,
-
     connect_host = connect_host,
 }

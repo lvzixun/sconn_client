@@ -225,9 +225,10 @@ end
 function mt:clear()
     local head = self.v_block_head
     while head do
-        insert_free_list(head)
+        insert_free_list(self, head)
         head = head.next
     end
+    self.v_block_head = false
     self.v_block_tail = false
     self.v_size = 0
 end

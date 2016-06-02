@@ -366,10 +366,10 @@ function mt:update()
     local state = self.v_state
     local state_name = state.name
 
-    if name == "reconnect_error" or 
-       name == "reconnect_match_error" or 
-       name == "reconnect_cache_error" then
-        return false, state.name, "reconnect"
+    if state_name == "reconnect_error" or 
+       state_name == "reconnect_match_error" or 
+       state_name == "reconnect_cache_error" then
+        return false, state_name, "reconnect"
     end
 
     local success, err, status = sock:update()
@@ -420,7 +420,7 @@ end
 function mt:close()
     self.v_sock:close()
     self.v_recv_buf:clear()
-    switch_state(self, close)
+    switch_state(self, "close")
 end
 
 return {

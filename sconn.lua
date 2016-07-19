@@ -44,7 +44,7 @@ function cache_mt:insert(data)
     end
 end
 
-function cache_mt:pop(nbytes)
+function cache_mt:get(nbytes)
     if self.size < nbytes then
         return false
     end
@@ -62,18 +62,14 @@ function cache_mt:pop(nbytes)
             local sub_n = nbytes - count
             local pos = len-sub_n
             local sub_v = string.sub(v, pos+1)
-            cache[i] = string.sub(v, 1, pos)
             n = sub_n
             vv = sub_v
-        else
-            cache[i] = nil
         end
         table.insert(ret, 1, vv)
         count = count + n
         i = i-1
     end
 
-    self.size = self.size - nbytes
     return table.concat(ret)
 end
 
@@ -191,6 +187,7 @@ function state.newconnect.dispatch(self)
         self:send(self.v_send_buf[i])
     end
     self.v_send_buf_top = 0
+    self.v_send_buf = {}
 end
 
 
@@ -254,7 +251,7 @@ function state.reconnect.dispatch(self)
     -- 需要补发的数据
     elseif recv < sendnumber then 
         local nbytes = sendnumber - recv
-        local data = self.v_cache:pop(nbytes)
+        local data = self.v_cache:get(nbytes)
         -- 缓存的数据不足
         if not data then
             switch_state(self, "reconnect_cache_error")

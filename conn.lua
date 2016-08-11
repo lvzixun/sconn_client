@@ -70,6 +70,9 @@ local function _flush_send(self)
         local len = #v
         local n, err = fd:send(v)
         if not n then
+            if err == EAGAIN or err == EINTR then
+                break
+            end
             return false, conn_error(err)
         else
             count = count + n

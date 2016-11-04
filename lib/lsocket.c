@@ -20,6 +20,7 @@ Module interface:
 */
 #include <string.h>
 #include <errno.h>
+#include <stdio.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -221,6 +222,7 @@ _resolve(lua_State *L) {
         }
         res = res->ai_next;
     }
+    freeaddrinfo(res);
     return 1;
 }
 
@@ -478,6 +480,8 @@ _sock_bind(lua_State *L) {
     luaL_checkinteger(L, 3);
     port = lua_tostring(L, 3);
 
+    printf("_sock_bind: %s %s\n", host, port);
+
     err = _getsockaddrarg(sock, host, port, &res);
     if(err != 0) {
         return _push_result(L, err);
@@ -642,6 +646,7 @@ static int
 _sock_close(lua_State *L) {
     socket_t *sock = _getsock(L, 1);
     int fd = sock->fd;
+    printf("_sock_close!!! %d\n", fd);
     if(fd != -1) {
         sock->fd = -1;
         close(fd);

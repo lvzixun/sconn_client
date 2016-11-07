@@ -40,6 +40,7 @@ local function connect(addr, port)
             v_send_buf = buffer_queue.create(),
             v_recv_buf = buffer_queue.create(),
             v_fd = fd,
+            v_is_connect = false,
 
             o_host_addr = addr,
             o_port = port,
@@ -122,6 +123,7 @@ local function _check_connect(self)
     if not success then
         return false, err and conn_error(err) or "connecting"
     else
+        self.v_is_connect = true
         return true
     end
 end
@@ -192,12 +194,14 @@ function mt:new_connect(addr, port)
 
     local errcode = fd:connect(addr.addr, port)
     if errcode == OK or
+       errcode == EAGAIN or
        errcode == EINPROGRESS or
        errcode == EINTR or 
        errcode == EISCONN  then
        self.v_fd:close()
        self.v_recv_buf:clear()
        self.v_send_buf:clear()
+       self.v_is_connect = false
        self.v_fd = fd
        self.o_host_addr = addr
        self.o_port = port

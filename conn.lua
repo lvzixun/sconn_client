@@ -118,6 +118,10 @@ local function _flush_recv(self)
 end
 
 local function _check_connect(self)
+    if self.v_is_connect then
+        return true
+    end
+    
     local fd = self.v_fd
     local success, err = fd:check_async_connect()
     if not success then

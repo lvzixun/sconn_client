@@ -227,12 +227,10 @@ end
 
 
 function state.reconnect.dispatch(self)
-    local count = self.v_sock:recv_msg(out, 2, "big")
+    local data = self.v_sock:pop_msg(2, "big")
 
-    if count<=0 then return end
+    if not data then return end
 
-    assert(count==1)
-    local data = out[1]
     log("dispatch:", data)
     local recv,msg = data:match "([^\n]*)\n([^\n]*)"
     recv = tonumber(recv)

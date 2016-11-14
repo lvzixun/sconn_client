@@ -148,6 +148,13 @@ function mt:recv_msg(out_msg, header_len, endian)
     return recv_buf:pop_all_block(out_msg, header_len, endian)
 end
 
+function mt:pop_msg(header_len, endian)
+    local recv_buf = self.v_recv_buf
+    header_len = header_len or DEF_MSG_HEADER_LEN
+    endian = endian or DEF_MSG_ENDIAN
+
+    return recv_buf:pop_block(header_len, endian)
+end
 
 
 function mt:send(data)

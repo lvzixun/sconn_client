@@ -156,12 +156,10 @@ end
 
 
 function state.newconnect.dispatch(self)
-    local count = self.v_sock:recv_msg(out, 2, "big")
+    local data = self.v_sock:pop_msg(2, "big")
 
-    if count<=0 then return end
-
-    assert(count==1)
-    local data = out[1]
+    if not data then return end
+    
     log("dispatch:", data)
     local id, key = data:match("([^\n]*)\n([^\n]*)")
 

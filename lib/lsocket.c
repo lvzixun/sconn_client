@@ -194,6 +194,7 @@ static int
 _resolve(lua_State *L) {
     const char* host = luaL_checkstring(L, 1);
     struct addrinfo *res = 0;
+    struct addrinfo *p = NULL;
 	int err, i;
 	char buf[sizeof(struct in6_addr)];
 
@@ -210,6 +211,7 @@ _resolve(lua_State *L) {
 
     i = 1;
     lua_newtable(L);
+    p = res;
     while(res) {
         // ignore all unsupported address
         if((res->ai_family == AF_INET || res->ai_family == AF_INET6) && res->ai_socktype == SOCK_STREAM) {
@@ -222,7 +224,7 @@ _resolve(lua_State *L) {
         }
         res = res->ai_next;
     }
-    freeaddrinfo(res);
+    freeaddrinfo(p);
     return 1;
 }
 

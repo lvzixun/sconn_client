@@ -18,17 +18,55 @@ Module interface:
 - socket.AF_INET, socket.SOCK_STREAM, etc.: constants from <socket.h>
 - socket.resolve(hostname), hostname can be anything recognized by getaddrinfo
 */
-#include <string.h>
-#include <errno.h>
-#include <stdio.h>
+#ifdef _MINGW32
+#  define WINVER _WIN32_WINNT_WINXP
+#endif
 
-#ifdef _WIN32
+#include <string.h>
+
+#ifdef _MSC_VER
+
+#ifndef _SSIZE_T_DEFINED
+#ifdef  _WIN64
+typedef unsigned __int64    ssize_t;
+#else
+typedef _W64 unsigned int   ssize_t;
+#endif
+#define _SSIZE_T_DEFINED
+#endif
+
+#define EINTR WSAEINTR
+#define EAGAIN WSAEWOULDBLOCK
+#define EINPROGRESS WSAEINPROGRESS
+#define ECONNREFUSED WSAECONNREFUSED    
+#define EISCONN  WSAEISCONN
+
+#ifndef _WIN32
+#define _WIN32
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
 #define close closesocket
-#define errno WSAGetLastError()
+#define socket_errno WSAGetLastError()
+
+#elif _MINGW32
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <getaddrinfo.h>
+
+#define EINTR WSAEINTR
+#define EAGAIN WSAEWOULDBLOCK
+#define EINPROGRESS WSAEINPROGRESS
+#define ECONNREFUSED WSAECONNREFUSED
+#define EISCONN  WSAEISCONN
+#define close closesocket
+#define socket_errno WSAGetLastError()
+
 #else
+
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -36,6 +74,8 @@ Module interface:
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#define socket_errno errno
+
 #endif
 
 #include "lsocket.h"
@@ -152,17 +192,9 @@ _push_result(lua_State *L, int err) {
     if (err == 0) {
         lua_pushinteger(L, err);
     } else {
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
     }
     return 1;
-}
-
-static int
-_sleep(lua_State* L) {
-    lua_Number sec = lua_tointeger(L, 1);
-    
-    sleep(sec);
-    return 0;
 }
 
 
@@ -175,14 +207,14 @@ _sleep(lua_State* L) {
  */
 static int
 _socket(lua_State *L) {
-    int family    = luaL_checkinteger(L, 1);
-    int type      = luaL_checkinteger(L, 2);
-    int protocol  = luaL_optinteger(L,3,0);
+    int family    = (int)luaL_checkinteger(L, 1);
+    int type      = (int)luaL_checkinteger(L, 2);
+    int protocol  = (int)luaL_optinteger(L,3,0);
 
     int fd = socket(family, type, protocol);
     if(fd < 0) {
         lua_pushnil(L);
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
         return 2;
     }
     _setsock(L, fd, family, type, protocol);
@@ -201,6 +233,7 @@ _resolve(lua_State *L) {
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
 
     err = getaddrinfo(host, NULL, &hints, &res);
     if(err != 0) {
@@ -250,9 +283,29 @@ _normalize_ip(lua_State *L) {
 }
 
 static int
-_strerror(lua_State *L) {
-    int err = luaL_checkinteger(L, 1);
-    lua_pushstring(L, strerror(err));
+_lstrerror(lua_State *L) {
+    int err = (int)luaL_checkinteger(L, 1);
+    #if defined(_MINGW32) || defined(_WIN32)
+        wchar_t *s = NULL;
+        char error_s[128] = {0};
+        FormatMessageW(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, 
+            NULL, err,
+            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+            (LPWSTR)(&s), 0, NULL);
+        WideCharToMultiByte(CP_UTF8, 0, s, -1, error_s, sizeof(error_s), NULL, NULL);
+        lua_pushstring(L, error_s);
+        LocalFree(s);
+    #else
+        lua_pushstring(L, strerror(err));
+    #endif
+    return 1;
+}
+
+static int
+_lgai_strerror(lua_State *L) {
+    int err = (int)luaL_checkinteger(L, 1);
+    lua_pushstring(L, gai_strerror(err));
     return 1;
 }
 
@@ -301,7 +354,7 @@ _sock_connect(lua_State *L) {
     freeaddrinfo(res);
 
     if(err != 0) {
-        return _push_result(L, errno);
+        return _push_result(L, socket_errno);
     } else {
         return _push_result(L, err);
     }
@@ -329,15 +382,15 @@ _sock_check_async_connect(lua_State *L) {
     // error
     if(n < 0) {
       lua_pushboolean(L, 0);
-      lua_pushinteger(L, errno);
+      lua_pushinteger(L, socket_errno);
       return 2;
     }
 
     int err;
     socklen_t errl = sizeof(err);
-    if(getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &errl) < 0) {
+    if(getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, (char*)&err, &errl) < 0) {
       lua_pushboolean(L, 0);
-      lua_pushinteger(L, errno);
+      lua_pushinteger(L, socket_errno);
       return 2;
     }
 
@@ -356,18 +409,16 @@ static int
 _sock_recv(lua_State *L) {
     socket_t *sock = _getsock(L, 1);
     size_t len = (lua_Unsigned)luaL_optinteger(L, 2, RECV_BUFSIZE);
-	int nread;
-
-#ifdef _WIN32
-	char *buf = (char*)lua_newuserdata(L, len);
-#else
+    ssize_t nread;
 	char buf[len];
-#endif
 
+    // printf("before recv %d -> socket_errno:%d\n", sock->fd, socket_errno);
+    // socket_errno = 3;
     nread = recv(sock->fd, buf, len, 0);
+    // printf("recv %d -> nread:%d socket_errno:%d\n", sock->fd, nread, socket_errno);
     if(nread < 0) {
         lua_pushnil(L);
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
         return 2;
     }
     lua_pushlstring(L, buf, nread);
@@ -381,7 +432,7 @@ _sock_send(lua_State *L) {
     const char* buf = luaL_checklstring(L, 2, &len);
     size_t from = luaL_optinteger(L, 3, 0);
     int flags = 0;
-	int nwrite;
+	  ssize_t nwrite;
 #ifdef MSG_NOSIGNAL
     flags = MSG_NOSIGNAL;
 #endif
@@ -393,7 +444,7 @@ _sock_send(lua_State *L) {
     nwrite = send(sock->fd, buf+from, len - from, flags);
     if(nwrite < 0) {
         lua_pushnil(L);
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
         return 2;
     }
     lua_pushinteger(L, nwrite);
@@ -404,15 +455,11 @@ static int
 _sock_recvfrom(lua_State *L) {
     socklen_t addr_len;
 	struct sockaddr *addr;
-	int nread;
+	ssize_t nread;
 
 	socket_t *sock = _getsock(L, 1);
     size_t len = (lua_Unsigned)luaL_checkinteger(L, 2);
-#ifdef _WIN32
-	char *buf = (char*)lua_newuserdata(L, len);
-#else
 	char buf[len];
-#endif
 
     if(!_getsockaddrlen(sock, &addr_len)) {
         return luaL_argerror(L, 1, "bad family");
@@ -422,7 +469,7 @@ _sock_recvfrom(lua_State *L) {
     nread = recvfrom(sock->fd, buf, len, 0, addr, &addr_len);
     if(nread < 0) {
         lua_pushnil(L);
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
         return 2;
     }
     lua_pushlstring(L, buf, nread);
@@ -434,7 +481,7 @@ _sock_sendto(lua_State *L) {
     const char *host, *port, *buf;
     size_t from, len;
     int flags = 0;
-    int err, nwrite;
+    ssize_t err, nwrite;
     struct addrinfo *res = 0;
 
     socket_t *sock = _getsock(L, 1);
@@ -464,7 +511,7 @@ _sock_sendto(lua_State *L) {
     nwrite = sendto(sock->fd, buf + from, len - from, flags, res->ai_addr, res->ai_addrlen);
     if(nwrite < 0) {
         lua_pushnil(L);
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
         return 2;
     }
     lua_pushinteger(L, nwrite);
@@ -482,8 +529,6 @@ _sock_bind(lua_State *L) {
     luaL_checkinteger(L, 3);
     port = lua_tostring(L, 3);
 
-    printf("_sock_bind: %s %s\n", host, port);
-
     err = _getsockaddrarg(sock, host, port, &res);
     if(err != 0) {
         return _push_result(L, err);
@@ -492,7 +537,7 @@ _sock_bind(lua_State *L) {
     err = bind(sock->fd, res->ai_addr, res->ai_addrlen);
     freeaddrinfo(res);
     if (err != 0) {
-        return _push_result(L, errno);
+        return _push_result(L, socket_errno);
     } else {
         return _push_result(L, err);
     }
@@ -501,10 +546,10 @@ _sock_bind(lua_State *L) {
 static int
 _sock_listen(lua_State *L) {
     socket_t *sock = _getsock(L, 1);
-    int backlog = luaL_optinteger(L, 2, 256);
+    int backlog = (int)luaL_optinteger(L, 2, 256);
     int err = listen(sock->fd, backlog);
     if(err != 0) {
-        return _push_result(L, errno);
+        return _push_result(L, socket_errno);
     } else {
         return _push_result(L, err);
     }
@@ -516,7 +561,7 @@ _sock_accept(lua_State *L) {
     int fd = accept(sock->fd, NULL, NULL);
     if(fd < 0) {
         lua_pushnil(L);
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
         return 2;
     }
     _setsock(L, fd, sock->family, sock->type, sock->protocol);
@@ -549,7 +594,7 @@ _sock_getpeername(lua_State *L) {
     err = getpeername(sock->fd, addr, &len);
     if(err < 0) {
         lua_pushnil(L);
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
         return 2;
     }
     return _makeaddr(L, addr, len);
@@ -570,7 +615,7 @@ _sock_getsockname(lua_State *L) {
     err = getsockname(sock->fd, addr, &len);
     if(err < 0) {
         lua_pushnil(L);
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
         return 2;
     }
     return _makeaddr(L, addr, len);
@@ -581,9 +626,9 @@ _sock_getsockopt(lua_State *L) {
     int err;
 
     socket_t *sock = _getsock(L, 1);
-    int level = luaL_checkinteger(L, 2);
-    int optname = luaL_checkinteger(L, 3);
-    socklen_t buflen = luaL_optinteger(L, 4, 0);
+    int level = (int)luaL_checkinteger(L, 2);
+    int optname = (int)luaL_checkinteger(L, 3);
+    socklen_t buflen = (int)luaL_optinteger(L, 4, 0);
 
     if(buflen > 1024) {
         return luaL_argerror(L, 4, "should less than 1024");
@@ -608,7 +653,7 @@ _sock_getsockopt(lua_State *L) {
     return 1;
 failed:
     lua_pushnil(L);
-    lua_pushinteger(L, errno);
+    lua_pushinteger(L, socket_errno);
     return 2;
 }
 
@@ -616,28 +661,28 @@ static int
 _sock_setsockopt(lua_State *L) {
     const char* buf;
     size_t buflen;
-    int type, err;
+    ssize_t type, err;
 
     socket_t *sock = _getsock(L, 1);
-    int level = luaL_checkinteger(L, 2);
-    int optname = luaL_checkinteger(L, 3);
+    int level = (int)luaL_checkinteger(L, 2);
+    int optname = (int)luaL_checkinteger(L, 3);
     luaL_checkany(L, 4);
 
     type = lua_type(L, 4);
     if(type == LUA_TSTRING) {
         buf = luaL_checklstring(L, 4, &buflen);
     } else if(type == LUA_TNUMBER) {
-        int flag = luaL_checkinteger(L, 4);
+        int flag = (int)luaL_checkinteger(L, 4);
         buf = (const char*)&flag;
         buflen = sizeof(flag);
     } else {
         return luaL_argerror(L, 4, "unsupported type");
     }
 
-    err = setsockopt(sock->fd, level, optname, buf, buflen);
+    err = setsockopt(sock->fd, level, optname, buf, (socklen_t)buflen);
     if(err < 0) {
         lua_pushboolean(L, 0);
-        lua_pushinteger(L, errno);
+        lua_pushinteger(L, socket_errno);
         return 2;
     }
     lua_pushboolean(L, 1);
@@ -648,7 +693,6 @@ static int
 _sock_close(lua_State *L) {
     socket_t *sock = _getsock(L, 1);
     int fd = sock->fd;
-    printf("_sock_close!!! %d\n", fd);
     if(fd != -1) {
         sock->fd = -1;
         close(fd);
@@ -702,8 +746,8 @@ static const struct luaL_Reg socket_methods[] = {
 static const struct luaL_Reg socket_module_methods[] = {
     {"socket", _socket},
     {"resolve", _resolve},
-    {"strerror", _strerror},
-    {"sleep", _sleep},
+    {"strerror", _lstrerror},
+    {"gai_strerror", _lgai_strerror},
     {"normalize_ip", _normalize_ip},
     {NULL, NULL}
 };
@@ -788,20 +832,6 @@ LUALIB_API int luaopen_socket_c(lua_State *L) {
     ADD_CONSTANT(L, EINPROGRESS);
     ADD_CONSTANT(L, ECONNREFUSED);
     ADD_CONSTANT(L, EISCONN);
-
-    // getaddrinfo errors
-    ADD_CONSTANT(L, EAI_AGAIN);
-    ADD_CONSTANT(L, EAI_BADFLAGS);
-    ADD_CONSTANT(L, EAI_BADHINTS);
-    ADD_CONSTANT(L, EAI_FAIL);
-    ADD_CONSTANT(L, EAI_FAMILY);
-    ADD_CONSTANT(L, EAI_MEMORY);
-    ADD_CONSTANT(L, EAI_NONAME);
-    ADD_CONSTANT(L, EAI_OVERFLOW);
-    ADD_CONSTANT(L, EAI_PROTOCOL);
-    ADD_CONSTANT(L, EAI_SERVICE);
-    ADD_CONSTANT(L, EAI_SOCKTYPE);
-    ADD_CONSTANT(L, EAI_SYSTEM);
 
     return 1;
 }

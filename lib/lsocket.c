@@ -228,7 +228,7 @@ _resolve(lua_State *L) {
     struct addrinfo *res = 0;
     struct addrinfo *p = NULL;
 	int err, i;
-	char buf[sizeof(struct in6_addr)];
+	char buf[INET6_ADDRSTRLEN] = {0};
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));

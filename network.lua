@@ -78,7 +78,7 @@ end
 
 
 function mt:update()
-    local success, err = self.v_conn:update()
+    local success, err, status = self.v_conn:update()
 
     if success then
         local client = self.v_client
@@ -92,7 +92,7 @@ function mt:update()
         end
     end
 
-    return success, err
+    return success, err, status
 end
 
 

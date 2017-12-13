@@ -1,5 +1,4 @@
 local conn = require "conn"
-local socket = require "socket.c"
 local crypt = require "crypt"
 local rc4 = require "rc4.c"
 local buffer_queue = require "buffer_queue"
@@ -79,6 +78,17 @@ function cache_mt:clear()
     self.top = 0
 end
 
+local function dummy(...)
+    log("send dummy")
+end
+
+local function dispose_error(state_self, _success, _err, _status)
+    local success = false
+    local err = state_self.name
+    local status = "reconnect_error"
+    return success, err, status
+end
+
 -------------- state ------------------
 
 local state = {
@@ -87,6 +97,7 @@ local state = {
         request = false,
         dispatch = false,
         send = false,
+        dispose = false,
     },
 
     reconnect = {
@@ -94,6 +105,7 @@ local state = {
         request = false,
         dispatch = false,
         send = false,
+        dispose = false,
     },
 
     forward = {
@@ -101,22 +113,31 @@ local state = {
         request = false,
         dispatch = false,
         send = false,
+        dispose = false,
     },
 
     reconnect_error = {
         name = "reconnect_error",
+        send = dummy,
+        dispose = dispose_error,
     },
 
     reconnect_match_error = {
         name = "reconnect_match_error",
+        send = dummy, 
+        dispose = dispose_error,
     },
 
     reconnect_cache_error = {
         name = "reconnect_cache_error",
+        send = dummy, 
+        dispose = dispose_error,
     },
 
     close = {
         name = "close",
+        send = dummy,
+        dispose = false,
     },
 }
 
@@ -159,7 +180,7 @@ function state.newconnect.dispatch(self)
     local data = self.v_sock:pop_msg(2, "big")
 
     if not data then return end
-    
+
     log("dispatch:", data)
     local id, key = data:match("([^\n]*)\n([^\n]*)")
 
@@ -169,10 +190,10 @@ function state.newconnect.dispatch(self)
     local secret = crypt.dhsecret(key, self.v_clientkey)
 
     local rc4_key
-        = crypt.hmac64(secret, "\0\0\0\0\0\0\0\0")
-        ..crypt.hmac64(secret, "\1\0\0\0\0\0\0\0")
-        ..crypt.hmac64(secret, "\2\0\0\0\0\0\0\0")
-        ..crypt.hmac64(secret, "\3\0\0\0\0\0\0\0")
+        = crypt.hmac64_md5(secret, "\0\0\0\0\0\0\0\0")
+        ..crypt.hmac64_md5(secret, "\1\0\0\0\0\0\0\0")
+        ..crypt.hmac64_md5(secret, "\2\0\0\0\0\0\0\0")
+        ..crypt.hmac64_md5(secret, "\3\0\0\0\0\0\0\0")
 
     self.v_secret = secret
     self.v_rc4_c2s = rc4.rc4(rc4_key)
@@ -189,6 +210,15 @@ function state.newconnect.dispatch(self)
 end
 
 
+function state.newconnect.dispose(state_self, success, err, status)
+    if success then
+        return true, nil, "connect"
+    else
+        err = string.format("sock_error:%s sock_status:%s sconn_state:newconnect", err, status)
+        return false, err, "connect"
+    end
+end
+
 --------------  reconnect state ------------------
 function state.reconnect.request(self)
     --id\n
@@ -203,7 +233,7 @@ function state.reconnect.request(self)
         self.v_reconnect_index,
         self.v_recvnumber)
 
-    local hmac = crypt.base64encode(crypt.hmac64(crypt.hashkey(content), self.v_secret))
+    local hmac = crypt.base64encode(crypt.hmac64_md5(crypt.hashkey(content), self.v_secret))
     local data = string.format("%s%s\n", content, hmac)
     data = pack_data(data, 2, "big")
 
@@ -228,41 +258,62 @@ function state.reconnect.dispatch(self)
     local data = self.v_sock:pop_msg(2, "big")
 
     if not data then return end
-
+    
     log("dispatch:", data)
     local recv,msg = data:match "([^\n]*)\n([^\n]*)"
     recv = tonumber(recv)
 
     local sendnumber = self.v_sendnumber
 
+    local cb = self.v_reconnect_cb
+    self.v_reconnect_cb = nil
+
     -- 重连失败
     if msg ~= "200" then
         log("msg:", msg)
+        if cb then cb(false) end
         switch_state(self, "reconnect_error")
+        return
+    end
 
     -- 服务器接受的数据要比客户端记录的发送的数据还要多
-    elseif recv>sendnumber then
+    if recv > sendnumber then
+        if cb then cb(false) end
         switch_state(self, "reconnect_match_error")
+        return
+    end
 
     -- 需要补发的数据
-    elseif recv < sendnumber then 
-        local nbytes = sendnumber - recv
+    local nbytes = 0
+    if recv < sendnumber then
+        nbytes = sendnumber - recv
         local data = self.v_cache:get(nbytes)
         -- 缓存的数据不足
         if not data then
+            if cb then cb(false) end
             switch_state(self, "reconnect_cache_error")
-        else
-            assert(#data == nbytes)
-            self.v_sock:send(data)
-            switch_state(self, "forward")
+            return
         end
 
-    -- 不需要补发
-    else
-        switch_state(self, "forward")
+        -- 发送补发数据
+        assert(#data == nbytes)
+        self.v_sock:send(data)
     end
+
+    -- 重连成功
+    if cb then cb(true) end
+    switch_state(self, "forward")
 end
 
+
+function state.reconnect.dispose(state_self, success, err, status)
+    if success then
+        return true, nil, "reconnect"
+    else
+        err = string.format("sock_error:%s sock_status:%s sconn_state:reconnect", err, status)
+        return false, err, "reconnect"
+    end
+end
 
 --------------  forward ------------------
 function state.forward.dispatch(self)
@@ -292,6 +343,23 @@ function state.forward.send(self, data)
 end
 
 
+function state.forward.dispose(state_self, success, err, status)
+    if success then
+        if status ~= "forward" then
+            errorf("invalid sock_status:%s", status)
+        end
+        return true, nil, "forward"
+    else
+        err = string.format("sock_error:%s sock_status:%s sconn_state:forward", err, status)
+        return false, err, "forward"
+    end
+end
+
+--------------  close ------------------
+function state.close.dispose(state_self, success, err, status)
+    err = string.format("sock_error:%s sock_status:%s sconn_state:close", err, status)
+    return false, err, "close"
+end
 
 
 local function connect(host, port)
@@ -314,9 +382,8 @@ local function connect(host, port)
         v_send_buf = {},
         v_send_buf_top = 0,
 
+
         v_recv_buf = buffer_queue.create(),
-        v_dispatch = _newconnect_dispatch,
-        v_send = _newconnect_send,
     }
 
     local sock, err = conn.connect_host(host, port)
@@ -334,7 +401,7 @@ function mt:cur_state()
     return self.v_state.name
 end
 
-function mt:reconnect()
+function mt:reconnect(cb)
     local state_name = self.v_state.name
     if state_name ~= "forward" and state_name ~= "reconnect" then
         return false, string.format("error state switch `%s` to reconnect", state_name)
@@ -348,29 +415,49 @@ function mt:reconnect()
         return false, err
     end
 
+    self.v_reconnect_cb = cb
     switch_state(self, "reconnect")
     return true
 end
 
+function mt:flush_send()
 
+end
+
+
+--[[ 
+update 接口现在会返回三个参数 success, err, status
+
+success: boolean类型 表示当前status是否正常
+    true: err返回值为nil
+    false: err返回值为string，描述错误信息
+
+err: string类型 表示当前status的错误信息，在success 为false才会有效
+
+status: string类型 当前sconn所在的状态，状态只能是:
+    "connect": 连接状态
+    "forward": 连接成功状态
+    "reconnect": 断线重连状态
+    "connect_break": 断开连接状态
+    "close": 关闭状态
+]]
 
 function mt:update()
     local sock = self.v_sock
     local state = self.v_state
-    local state_name = state.name
-
-    if state_name == "reconnect_error" or 
-       state_name == "reconnect_match_error" or 
-       state_name == "reconnect_cache_error" then
-        return false, state_name, "reconnect"
-    end
-
     local success, err, status = sock:update()
     local dispatch = state.dispatch
     if success and dispatch then
         dispatch(self)
     end
 
+    -- 网络连接主动断开
+    if status == "connect_break" then
+        return success, err, status
+    end
+
+    -- 处理返回状态值
+    success, err, status = state.dispose(state, success, err, status)
     return success ,err, status
 end
 

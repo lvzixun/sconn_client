@@ -40,14 +40,14 @@ local function connect(addr, port)
             v_send_buf = buffer_queue.create(),
             v_recv_buf = buffer_queue.create(),
             v_fd = fd,
-            v_is_connect = false,
 
             o_host_addr = addr,
             o_port = port,
+            v_check_connect = true,
        }
        return setmetatable(raw, {__index = mt})
    else
-        return nil, conn_error(errcode)
+       return nil, conn_error(errcode)
    end
 end
 
@@ -119,11 +119,19 @@ end
 
 local function _check_connect(self)
     local fd = self.v_fd
-    local success, err = fd:check_async_connect()
-    if not success then
-        return false, err and conn_error(err) or "connecting"
+    if not fd then
+        return false, 'fd is nil'
+    end
+
+    if self.v_check_connect then
+        local success, err = fd:check_async_connect()
+        if not success then
+            return false, err and conn_error(err) or "connecting"
+        else
+            self.v_check_connect = false
+            return true
+        end
     else
-        self.v_is_connect = true
         return true
     end
 end
@@ -170,10 +178,36 @@ end
 
 
 
+--[[
+update 接口现在会返回三个参数 success, err, status
+
+success: boolean类型 表示当前status是否正常
+    true: err返回值为nil
+    false: err返回值为string，描述错误信息
+
+err: string类型 表示当前status的错误信息，在success 为false才会有效
+
+status: string类型 当前sconn所在的状态，状态只能是:
+    "connect": 连接状态
+    "forward": 连接成功状态
+    "recv": 接受状态数据状态
+    "send": 发送数据状态
+    "close": 关闭状态
+]]
+
 function mt:update()
+    local fd = self.v_fd
+    if not fd then
+        return false, "fd is nil", "close"
+    end
+
     local success, err = _check_connect(self)
     if not success then
-        return false, err, "connect"
+        if err == "connecting" then
+            return true, nil, "connect"
+        else
+            return false, err, "connect"
+        end
     end
 
     success, err = _flush_send(self)
@@ -183,12 +217,23 @@ function mt:update()
 
     success, err = _flush_recv(self)
     if not success then
-        return false, err, "recv"
+        if err == "connect_break" then
+            return false, "connect break", "connect_break"
+        else
+            return false, err, "recv"
+        end
     end
 
-    return true
+    return true, nil, "forward"
 end
 
+
+function mt:flush_send()
+    local count = false
+    repeat
+        count = _flush_send(self)
+    until not count or count == 0
+end
 
 function mt:getsockname()
     return self.v_fd:getsockname()
@@ -208,10 +253,10 @@ function mt:new_connect(addr, port)
        self.v_fd:close()
        self.v_recv_buf:clear()
        self.v_send_buf:clear()
-       self.v_is_connect = false
        self.v_fd = fd
        self.o_host_addr = addr
        self.o_port = port
+       self.v_check_connect = true
        return true
     else
         return false, conn_error(errcode)
@@ -219,8 +264,10 @@ function mt:new_connect(addr, port)
 end
 
 function mt:close()
+    self:flush_send()
     self.v_fd:close()
     self.v_fd = nil
+    self.v_check_connect = true
 end
 
 

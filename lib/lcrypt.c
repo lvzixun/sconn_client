@@ -1,16 +1,24 @@
-#include "lua.h"
-#include "lauxlib.h"
+#define LUA_LIB
 
+#include <lua.h>
+#include <lauxlib.h>
+
+#include <math.h>
 #include <time.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 
+#ifdef _MSC_VER
+#define random rand
+#define srandom srand
+#endif // _MSC_VER
+
 #define SMALL_CHUNK 256
 
 /* the eight DES S-boxes */
 
-uint32_t SB1[64] = {
+static uint32_t SB1[64] = {
   0x01010400, 0x00000000, 0x00010000, 0x01010404,
   0x01010004, 0x00010404, 0x00000004, 0x00010000,
   0x00000400, 0x01010400, 0x01010404, 0x00000400,
@@ -180,42 +188,42 @@ static uint32_t RHs[16] = {
 
 /* platform-independant 32-bit integer manipulation macros */
 
-#define GET_UINT32(n,b,i)					   \
-{											   \
-  (n) = ( (uint32_t) (b)[(i)	] << 24 )	   \
-  | ( (uint32_t) (b)[(i) + 1] << 16 )	   \
-  | ( (uint32_t) (b)[(i) + 2] <<  8 )	   \
-  | ( (uint32_t) (b)[(i) + 3]	   );	  \
+#define GET_UINT32(n,b,i)            \
+{                        \
+  (n) = ( (uint32_t) (b)[(i)  ] << 24 )    \
+    | ( (uint32_t) (b)[(i) + 1] << 16 )    \
+    | ( (uint32_t) (b)[(i) + 2] <<  8 )    \
+    | ( (uint32_t) (b)[(i) + 3]    );   \
 }
 
-#define PUT_UINT32(n,b,i)					   \
-{											   \
-  (b)[(i)	] = (uint8_t) ( (n) >> 24 );	   \
-  (b)[(i) + 1] = (uint8_t) ( (n) >> 16 );	   \
-  (b)[(i) + 2] = (uint8_t) ( (n) >>  8 );	   \
-  (b)[(i) + 3] = (uint8_t) ( (n)	   );	   \
+#define PUT_UINT32(n,b,i)            \
+{                        \
+  (b)[(i) ] = (uint8_t) ( (n) >> 24 );     \
+  (b)[(i) + 1] = (uint8_t) ( (n) >> 16 );    \
+  (b)[(i) + 2] = (uint8_t) ( (n) >>  8 );    \
+  (b)[(i) + 3] = (uint8_t) ( (n)     );    \
 }
 
 /* Initial Permutation macro */
 
-#define DES_IP(X,Y)											 \
-{															   \
+#define DES_IP(X,Y)                      \
+{                                \
   T = ((X >>  4) ^ Y) & 0x0F0F0F0F; Y ^= T; X ^= (T <<  4);   \
   T = ((X >> 16) ^ Y) & 0x0000FFFF; Y ^= T; X ^= (T << 16);   \
   T = ((Y >>  2) ^ X) & 0x33333333; X ^= T; Y ^= (T <<  2);   \
   T = ((Y >>  8) ^ X) & 0x00FF00FF; X ^= T; Y ^= (T <<  8);   \
-  Y = ((Y << 1) | (Y >> 31)) & 0xFFFFFFFF;					\
-  T = (X ^ Y) & 0xAAAAAAAA; Y ^= T; X ^= T;				   \
-  X = ((X << 1) | (X >> 31)) & 0xFFFFFFFF;					\
+  Y = ((Y << 1) | (Y >> 31)) & 0xFFFFFFFF;          \
+  T = (X ^ Y) & 0xAAAAAAAA; Y ^= T; X ^= T;          \
+  X = ((X << 1) | (X >> 31)) & 0xFFFFFFFF;          \
 }
 
 /* Final Permutation macro */
 
-#define DES_FP(X,Y)											 \
-{															   \
-  X = ((X << 31) | (X >> 1)) & 0xFFFFFFFF;					\
-  T = (X ^ Y) & 0xAAAAAAAA; X ^= T; Y ^= T;				   \
-  Y = ((Y << 31) | (Y >> 1)) & 0xFFFFFFFF;					\
+#define DES_FP(X,Y)                      \
+{                                \
+  X = ((X << 31) | (X >> 1)) & 0xFFFFFFFF;          \
+  T = (X ^ Y) & 0xAAAAAAAA; X ^= T; Y ^= T;          \
+  Y = ((Y << 31) | (Y >> 1)) & 0xFFFFFFFF;          \
   T = ((Y >>  8) ^ X) & 0x00FF00FF; X ^= T; Y ^= (T <<  8);   \
   T = ((Y >>  2) ^ X) & 0x33333333; X ^= T; Y ^= (T <<  2);   \
   T = ((X >> 16) ^ Y) & 0x0000FFFF; Y ^= T; X ^= (T << 16);   \
@@ -224,19 +232,19 @@ static uint32_t RHs[16] = {
 
 /* DES round macro */
 
-#define DES_ROUND(X,Y)						  \
-{											   \
-  T = *SK++ ^ X;							  \
-  Y ^= SB8[ (T	  ) & 0x3F ] ^			  \
-  SB6[ (T >>  8) & 0x3F ] ^			  \
-  SB4[ (T >> 16) & 0x3F ] ^			  \
-  SB2[ (T >> 24) & 0x3F ];			   \
-  \
-  T = *SK++ ^ ((X << 28) | (X >> 4));		 \
-  Y ^= SB7[ (T	  ) & 0x3F ] ^			  \
-  SB5[ (T >>  8) & 0x3F ] ^			  \
-  SB3[ (T >> 16) & 0x3F ] ^			  \
-  SB1[ (T >> 24) & 0x3F ];			   \
+#define DES_ROUND(X,Y)              \
+{                        \
+  T = *SK++ ^ X;                \
+  Y ^= SB8[ (T    ) & 0x3F ] ^        \
+     SB6[ (T >>  8) & 0x3F ] ^        \
+     SB4[ (T >> 16) & 0x3F ] ^        \
+     SB2[ (T >> 24) & 0x3F ];        \
+                        \
+  T = *SK++ ^ ((X << 28) | (X >> 4));    \
+  Y ^= SB7[ (T    ) & 0x3F ] ^        \
+     SB5[ (T >>  8) & 0x3F ] ^        \
+     SB3[ (T >> 16) & 0x3F ] ^        \
+     SB1[ (T >> 24) & 0x3F ];        \
 }
 
 /* DES key schedule */
@@ -252,15 +260,15 @@ des_main_ks( uint32_t SK[32], const uint8_t key[8] ) {
   /* Permuted Choice 1 */
 
   T =  ((Y >>  4) ^ X) & 0x0F0F0F0F;  X ^= T; Y ^= (T <<  4);
-  T =  ((Y	  ) ^ X) & 0x10101010;  X ^= T; Y ^= (T	  );
+  T =  ((Y    ) ^ X) & 0x10101010;  X ^= T; Y ^= (T   );
 
-  X =   (LHs[ (X	  ) & 0xF] << 3) | (LHs[ (X >>  8) & 0xF ] << 2)
-    | (LHs[ (X >> 16) & 0xF] << 1) | (LHs[ (X >> 24) & 0xF ]	 )
+  X =   (LHs[ (X    ) & 0xF] << 3) | (LHs[ (X >>  8) & 0xF ] << 2)
+    | (LHs[ (X >> 16) & 0xF] << 1) | (LHs[ (X >> 24) & 0xF ]   )
     | (LHs[ (X >>  5) & 0xF] << 7) | (LHs[ (X >> 13) & 0xF ] << 6)
     | (LHs[ (X >> 21) & 0xF] << 5) | (LHs[ (X >> 29) & 0xF ] << 4);
 
   Y =   (RHs[ (Y >>  1) & 0xF] << 3) | (RHs[ (Y >>  9) & 0xF ] << 2)
-    | (RHs[ (Y >> 17) & 0xF] << 1) | (RHs[ (Y >> 25) & 0xF ]	 )
+    | (RHs[ (Y >> 17) & 0xF] << 1) | (RHs[ (Y >> 25) & 0xF ]   )
     | (RHs[ (Y >>  4) & 0xF] << 7) | (RHs[ (Y >> 12) & 0xF ] << 6)
     | (RHs[ (Y >> 20) & 0xF] << 5) | (RHs[ (Y >> 28) & 0xF ] << 4);
 
@@ -283,28 +291,28 @@ des_main_ks( uint32_t SK[32], const uint8_t key[8] ) {
     }
 
     *SK++ =   ((X <<  4) & 0x24000000) | ((X << 28) & 0x10000000)
-      | ((X << 14) & 0x08000000) | ((X << 18) & 0x02080000)
-      | ((X <<  6) & 0x01000000) | ((X <<  9) & 0x00200000)
-      | ((X >>  1) & 0x00100000) | ((X << 10) & 0x00040000)
-      | ((X <<  2) & 0x00020000) | ((X >> 10) & 0x00010000)
-      | ((Y >> 13) & 0x00002000) | ((Y >>  4) & 0x00001000)
-      | ((Y <<  6) & 0x00000800) | ((Y >>  1) & 0x00000400)
-      | ((Y >> 14) & 0x00000200) | ((Y	  ) & 0x00000100)
-      | ((Y >>  5) & 0x00000020) | ((Y >> 10) & 0x00000010)
-      | ((Y >>  3) & 0x00000008) | ((Y >> 18) & 0x00000004)
-      | ((Y >> 26) & 0x00000002) | ((Y >> 24) & 0x00000001);
+        | ((X << 14) & 0x08000000) | ((X << 18) & 0x02080000)
+        | ((X <<  6) & 0x01000000) | ((X <<  9) & 0x00200000)
+        | ((X >>  1) & 0x00100000) | ((X << 10) & 0x00040000)
+        | ((X <<  2) & 0x00020000) | ((X >> 10) & 0x00010000)
+        | ((Y >> 13) & 0x00002000) | ((Y >>  4) & 0x00001000)
+        | ((Y <<  6) & 0x00000800) | ((Y >>  1) & 0x00000400)
+        | ((Y >> 14) & 0x00000200) | ((Y    ) & 0x00000100)
+        | ((Y >>  5) & 0x00000020) | ((Y >> 10) & 0x00000010)
+        | ((Y >>  3) & 0x00000008) | ((Y >> 18) & 0x00000004)
+        | ((Y >> 26) & 0x00000002) | ((Y >> 24) & 0x00000001);
 
     *SK++ =   ((X << 15) & 0x20000000) | ((X << 17) & 0x10000000)
-      | ((X << 10) & 0x08000000) | ((X << 22) & 0x04000000)
-      | ((X >>  2) & 0x02000000) | ((X <<  1) & 0x01000000)
-      | ((X << 16) & 0x00200000) | ((X << 11) & 0x00100000)
-      | ((X <<  3) & 0x00080000) | ((X >>  6) & 0x00040000)
-      | ((X << 15) & 0x00020000) | ((X >>  4) & 0x00010000)
-      | ((Y >>  2) & 0x00002000) | ((Y <<  8) & 0x00001000)
-      | ((Y >> 14) & 0x00000808) | ((Y >>  9) & 0x00000400)
-      | ((Y	  ) & 0x00000200) | ((Y <<  7) & 0x00000100)
-      | ((Y >>  7) & 0x00000020) | ((Y >>  3) & 0x00000011)
-      | ((Y <<  2) & 0x00000004) | ((Y >> 21) & 0x00000002);
+        | ((X << 10) & 0x08000000) | ((X << 22) & 0x04000000)
+        | ((X >>  2) & 0x02000000) | ((X <<  1) & 0x01000000)
+        | ((X << 16) & 0x00200000) | ((X << 11) & 0x00100000)
+        | ((X <<  3) & 0x00080000) | ((X >>  6) & 0x00040000)
+        | ((X << 15) & 0x00020000) | ((X >>  4) & 0x00010000)
+        | ((Y >>  2) & 0x00002000) | ((Y <<  8) & 0x00001000)
+        | ((Y >> 14) & 0x00000808) | ((Y >>  9) & 0x00000400)
+        | ((Y   ) & 0x00000200) | ((Y <<  7) & 0x00000100)
+        | ((Y >>  7) & 0x00000020) | ((Y >>  3) & 0x00000011)
+        | ((Y <<  2) & 0x00000004) | ((Y >> 21) & 0x00000002);
   }
 }
 
@@ -338,8 +346,13 @@ static int
 lrandomkey(lua_State *L) {
   char tmp[8];
   int i;
+  char x = 0;
   for (i=0;i<8;i++) {
     tmp[i] = random() & 0xff;
+    x ^= tmp[i];
+  }
+  if (x==0) {
+    tmp[0] |= 1;  // avoid 0
   }
   lua_pushlstring(L, tmp, 8);
   return 1;
@@ -489,7 +502,7 @@ static int
 lfromhex(lua_State *L) {
   size_t sz = 0;
   const char * text = luaL_checklstring(L, 1, &sz);
-  if (sz & 2) {
+  if (sz & 1) {
     return luaL_error(L, "Invalid hex text size %d", (int)sz);
   }
   char tmp[SMALL_CHUNK];
@@ -512,50 +525,42 @@ lfromhex(lua_State *L) {
 }
 
 // Constants are the integer part of the sines of integers (in radians) * 2^32.
-const uint32_t k[64] = {
-  0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee ,
-  0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501 ,
-  0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be ,
-  0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821 ,
-  0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa ,
-  0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8 ,
-  0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed ,
-  0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a ,
-  0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c ,
-  0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70 ,
-  0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05 ,
-  0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665 ,
-  0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039 ,
-  0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1 ,
-  0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1 ,
-  0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391 };
-
+static const uint32_t k[64] = {
+0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee ,
+0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501 ,
+0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be ,
+0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821 ,
+0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa ,
+0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8 ,
+0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed ,
+0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a ,
+0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c ,
+0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70 ,
+0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05 ,
+0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665 ,
+0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039 ,
+0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1 ,
+0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1 ,
+0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391 };
+ 
 // r specifies the per-round shift amounts
-const uint32_t r[] = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
-  5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20,
-  4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-  6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21};
-
+static const uint32_t r[] = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+            5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20,
+            4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+            6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21};
+ 
 // leftrotate function definition
 #define LEFTROTATE(x, c) (((x) << (c)) | ((x) >> (32 - (c))))
 
 static void
-hmac(uint32_t x[2], uint32_t y[2], uint32_t result[2]) {
-  uint32_t w[16];
+digest_md5(uint32_t w[16], uint32_t result[4]) {
   uint32_t a, b, c, d, f, g, temp;
   int i;
-
+ 
   a = 0x67452301u;
   b = 0xefcdab89u;
   c = 0x98badcfeu;
   d = 0x10325476u;
-
-  for (i=0;i<16;i+=4) {
-    w[i] = x[1];
-    w[i+1] = x[0];
-    w[i+2] = y[1];
-    w[i+3] = y[0];
-  }
 
   for(i = 0; i<64; i++) {
     if (i < 16) {
@@ -577,11 +582,54 @@ hmac(uint32_t x[2], uint32_t y[2], uint32_t result[2]) {
     c = b;
     b = b + LEFTROTATE((a + f + k[i] + w[g]), r[i]);
     a = temp;
-
   }
 
-  result[0] = c^d;
-  result[1] = a^b;
+  result[0] = a;
+  result[1] = b;
+  result[2] = c;
+  result[3] = d;
+}
+
+// hmac64 use md5 algorithm without padding, and the result is (c^d .. a^b)
+static void
+hmac(uint32_t x[2], uint32_t y[2], uint32_t result[2]) {
+  uint32_t w[16];
+  uint32_t r[4];
+  int i;
+  for (i=0;i<16;i+=4) {
+    w[i] = x[1];
+    w[i+1] = x[0];
+    w[i+2] = y[1];
+    w[i+3] = y[0];
+  }
+
+  digest_md5(w,r);
+
+  result[0] = r[2]^r[3];
+  result[1] = r[0]^r[1];
+}
+
+static void
+hmac_md5(uint32_t x[2], uint32_t y[2], uint32_t result[2]) {
+  uint32_t w[16];
+  uint32_t r[4];
+  int i;
+  for (i=0;i<12;i+=4) {
+    w[i] = x[0];
+    w[i+1] = x[1];
+    w[i+2] = y[0];
+    w[i+3] = y[1];
+  }
+
+  w[12] = 0x80;
+  w[13] = 0;
+  w[14] = 384;
+  w[15] = 0;
+
+  digest_md5(w,r);
+
+  result[0] = (r[0] + 0x67452301u) ^ (r[2] + 0x98badcfeu);
+  result[1] = (r[1] + 0xefcdab89u) ^ (r[3] + 0x10325476u);
 }
 
 static void
@@ -589,11 +637,11 @@ read64(lua_State *L, uint32_t xx[2], uint32_t yy[2]) {
   size_t sz = 0;
   const uint8_t *x = (const uint8_t *)luaL_checklstring(L, 1, &sz);
   if (sz != 8) {
-    luaL_error(L, "Invalid hmac x");
+    luaL_error(L, "Invalid uint64 x");
   }
   const uint8_t *y = (const uint8_t *)luaL_checklstring(L, 2, &sz);
   if (sz != 8) {
-    luaL_error(L, "Invalid hmac y");
+    luaL_error(L, "Invalid uint64 y");
   }
   xx[0] = x[0] | x[1]<<8 | x[2]<<16 | x[3]<<24;
   xx[1] = x[4] | x[5]<<8 | x[6]<<16 | x[7]<<24;
@@ -602,11 +650,7 @@ read64(lua_State *L, uint32_t xx[2], uint32_t yy[2]) {
 }
 
 static int
-lhmac64(lua_State *L) {
-  uint32_t x[2], y[2];
-  read64(L, x, y);
-  uint32_t result[2];
-  hmac(x,y,result);
+pushqword(lua_State *L, uint32_t result[2]) {
   uint8_t tmp[8];
   tmp[0] = result[0] & 0xff;
   tmp[1] = (result[0] >> 8 )& 0xff;
@@ -619,6 +663,55 @@ lhmac64(lua_State *L) {
 
   lua_pushlstring(L, (const char *)tmp, 8);
   return 1;
+}
+
+static int
+lhmac64(lua_State *L) {
+  uint32_t x[2], y[2];
+  read64(L, x, y);
+  uint32_t result[2];
+  hmac(x,y,result);
+  return pushqword(L, result);
+}
+
+/*
+  h1 = crypt.hmac64_md5(a,b)
+  m = md5.sum((a..b):rep(3))
+  h2 = crypt.xor_str(m:sub(1,8), m:sub(9,16))
+  assert(h1 == h2)
+ */
+static int
+lhmac64_md5(lua_State *L) {
+  uint32_t x[2], y[2];
+  read64(L, x, y);
+  uint32_t result[2];
+  hmac_md5(x,y,result);
+  return pushqword(L, result);
+}
+
+/*
+  8bytes key
+  string text
+ */
+static int
+lhmac_hash(lua_State *L) {
+  uint32_t key[2];
+  size_t sz = 0;
+  const uint8_t *x = (const uint8_t *)luaL_checklstring(L, 1, &sz);
+  if (sz != 8) {
+    luaL_error(L, "Invalid uint64 key");
+  }
+  key[0] = x[0] | x[1]<<8 | x[2]<<16 | x[3]<<24;
+  key[1] = x[4] | x[5]<<8 | x[6]<<16 | x[7]<<24;
+  const char * text = luaL_checklstring(L, 2, &sz);
+  uint8_t h[8];
+  Hash(text,(int)sz,h);
+  uint32_t htext[2];
+  htext[0] = h[0] | h[1]<<8 | h[2]<<16 | h[3]<<24;
+  htext[1] = h[4] | h[5]<<8 | h[6]<<16 | h[7]<<24;
+  uint32_t result[2];
+  hmac(htext,key,result);
+  return pushqword(L, result);
 }
 
 // powmodp64 for DH-key exchange
@@ -688,8 +781,11 @@ static int
 ldhsecret(lua_State *L) {
   uint32_t x[2], y[2];
   read64(L, x, y);
-  uint64_t r = powmodp((uint64_t)x[0] | (uint64_t)x[1]<<32,
-      (uint64_t)y[0] | (uint64_t)y[1]<<32);
+  uint64_t xx = (uint64_t)x[0] | (uint64_t)x[1]<<32;
+  uint64_t yy = (uint64_t)y[0] | (uint64_t)y[1]<<32;
+  if (xx == 0 || yy == 0)
+    return luaL_error(L, "Can't be 0");
+  uint64_t r = powmodp(xx, yy);
 
   push64(L, r);
 
@@ -703,13 +799,17 @@ ldhexchange(lua_State *L) {
   size_t sz = 0;
   const uint8_t *x = (const uint8_t *)luaL_checklstring(L, 1, &sz);
   if (sz != 8) {
-    luaL_error(L, "Invalid hmac x");
+    luaL_error(L, "Invalid dh uint64 key");
   }
   uint32_t xx[2];
   xx[0] = x[0] | x[1]<<8 | x[2]<<16 | x[3]<<24;
   xx[1] = x[4] | x[5]<<8 | x[6]<<16 | x[7]<<24;
 
-  uint64_t r = powmodp(5,	(uint64_t)xx[0] | (uint64_t)xx[1]<<32);
+  uint64_t x64 = (uint64_t)xx[0] | (uint64_t)xx[1]<<32;
+  if (x64 == 0)
+    return luaL_error(L, "Can't be 0");
+
+  uint64_t r = powmodp(G, x64);
   push64(L, r);
   return 1;
 }
@@ -740,20 +840,20 @@ lb64encode(lua_State *L) {
   int padding = sz-i;
   uint32_t v;
   switch(padding) {
-    case 1 :
-      v = text[i];
-      buffer[j] = encoding[v >> 2];
-      buffer[j+1] = encoding[(v & 3) << 4];
-      buffer[j+2] = '=';
-      buffer[j+3] = '=';
-      break;
-    case 2 :
-      v = text[i] << 8 | text[i+1];
-      buffer[j] = encoding[v >> 10];
-      buffer[j+1] = encoding[(v >> 4) & 0x3f];
-      buffer[j+2] = encoding[(v & 0xf) << 2];
-      buffer[j+3] = '=';
-      break;
+  case 1 :
+    v = text[i];
+    buffer[j] = encoding[v >> 2];
+    buffer[j+1] = encoding[(v & 3) << 4];
+    buffer[j+2] = '=';
+    buffer[j+3] = '=';
+    break;
+  case 2 :
+    v = text[i] << 8 | text[i+1];
+    buffer[j] = encoding[v >> 10];
+    buffer[j+1] = encoding[(v >> 4) & 0x3f];
+    buffer[j+2] = encoding[(v & 0xf) << 2];
+    buffer[j+3] = '=';
+    break;
   }
   lua_pushlstring(L, buffer, encode_sz);
   return 1;
@@ -804,42 +904,67 @@ lb64decode(lua_State *L) {
     }
     uint32_t v;
     switch (padding) {
-      case 0:
-        v = (unsigned)c[0] << 18 | c[1] << 12 | c[2] << 6 | c[3];
-        buffer[output] = v >> 16;
-        buffer[output+1] = (v >> 8) & 0xff;
-        buffer[output+2] = v & 0xff;
-        output += 3;
-        break;
-      case 1:
-        if (c[3] != -2 || (c[2] & 3)!=0) {
-          return luaL_error(L, "Invalid base64 text");
-        }
-        v = (unsigned)c[0] << 10 | c[1] << 4 | c[2] >> 2 ;
-        buffer[output] = v >> 8;
-        buffer[output+1] = v & 0xff;
-        output += 2;
-        break;
-      case 2:
-        if (c[3] != -2 || c[2] != -2 || (c[1] & 0xf) !=0)  {
-          return luaL_error(L, "Invalid base64 text");
-        }
-        v = (unsigned)c[0] << 2 | c[1] >> 4;
-        buffer[output] = v;
-        ++ output;
-        break;
-      default:
+    case 0:
+      v = (unsigned)c[0] << 18 | c[1] << 12 | c[2] << 6 | c[3];
+      buffer[output] = v >> 16;
+      buffer[output+1] = (v >> 8) & 0xff;
+      buffer[output+2] = v & 0xff;
+      output += 3;
+      break;
+    case 1:
+      if (c[3] != -2 || (c[2] & 3)!=0) {
         return luaL_error(L, "Invalid base64 text");
+      }
+      v = (unsigned)c[0] << 10 | c[1] << 4 | c[2] >> 2 ;
+      buffer[output] = v >> 8;
+      buffer[output+1] = v & 0xff;
+      output += 2;
+      break;
+    case 2:
+      if (c[3] != -2 || c[2] != -2 || (c[1] & 0xf) !=0)  {
+        return luaL_error(L, "Invalid base64 text");
+      }
+      v = (unsigned)c[0] << 2 | c[1] >> 4;
+      buffer[output] = v;
+      ++ output;
+      break;
+    default:
+      return luaL_error(L, "Invalid base64 text");
     }
   }
   lua_pushlstring(L, buffer, output);
   return 1;
 }
 
-int
+static int
+lxor_str(lua_State *L) {
+  size_t len1,len2;
+  const char *s1 = luaL_checklstring(L,1,&len1);
+  const char *s2 = luaL_checklstring(L,2,&len2);
+  if (len2 == 0) {
+    return luaL_error(L, "Can't xor empty string");
+  }
+  luaL_Buffer b;
+  char * buffer = luaL_buffinitsize(L, &b, len1);
+  int i;
+  for (i=0;i<len1;i++) {
+    buffer[i] = s1[i] ^ s2[i % len2];
+  }
+  luaL_addsize(&b, len1);
+  luaL_pushresult(&b);
+  return 1;
+}
+
+
+LUAMOD_API int
 luaopen_crypt(lua_State *L) {
   luaL_checkversion(L);
-  srandom(time(NULL));
+  static int init = 0;
+  if (!init) {
+    // Don't need call srandom more than once.
+    init = 1 ;
+    srandom(time(NULL));
+  }
   luaL_Reg l[] = {
     { "hashkey", lhashkey },
     { "randomkey", lrandomkey },
@@ -848,12 +973,16 @@ luaopen_crypt(lua_State *L) {
     { "hexencode", ltohex },
     { "hexdecode", lfromhex },
     { "hmac64", lhmac64 },
+    { "hmac64_md5", lhmac64_md5 },
     { "dhexchange", ldhexchange },
     { "dhsecret", ldhsecret },
     { "base64encode", lb64encode },
     { "base64decode", lb64decode },
+    { "hmac_hash", lhmac_hash },
+    { "xor_str", lxor_str },
     { NULL, NULL },
   };
   luaL_newlib(L,l);
   return 1;
 }
+

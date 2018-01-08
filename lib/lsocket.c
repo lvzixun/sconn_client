@@ -18,7 +18,7 @@ Module interface:
 - socket.AF_INET, socket.SOCK_STREAM, etc.: constants from <socket.h>
 - socket.resolve(hostname), hostname can be anything recognized by getaddrinfo
 */
-#ifdef _MINGW32
+#ifdef __MINGW32__
 #  define WINVER _WIN32_WINNT_WINXP
 #endif
 
@@ -28,9 +28,9 @@ Module interface:
 
 #ifndef _SSIZE_T_DEFINED
 #ifdef  _WIN64
-typedef unsigned __int64    ssize_t;
+typedef __int64  ssize_t;
 #else
-typedef _W64 unsigned int   ssize_t;
+typedef long     ssize_t;
 #endif
 #define _SSIZE_T_DEFINED
 #endif
@@ -46,11 +46,12 @@ typedef _W64 unsigned int   ssize_t;
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <io.h>
 #pragma comment(lib, "Ws2_32.lib")
 #define close closesocket
 #define socket_errno WSAGetLastError()
 
-#elif _MINGW32
+#elif __MINGW32__
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -74,6 +75,7 @@ typedef _W64 unsigned int   ssize_t;
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/time.h>
 #define socket_errno errno
 
 #endif
@@ -228,7 +230,7 @@ _resolve(lua_State *L) {
     struct addrinfo *res = 0;
     struct addrinfo *p = NULL;
 	int err, i;
-	char buf[INET6_ADDRSTRLEN] = {0};
+	char buf[INET6_ADDRSTRLEN];
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -285,7 +287,7 @@ _normalize_ip(lua_State *L) {
 static int
 _lstrerror(lua_State *L) {
     int err = (int)luaL_checkinteger(L, 1);
-    #if defined(_MINGW32) || defined(_WIN32)
+    #if defined(__MINGW32__) || defined(_WIN32)
         wchar_t *s = NULL;
         char error_s[128] = {0};
         FormatMessageW(
@@ -404,19 +406,25 @@ _sock_check_async_connect(lua_State *L) {
     return 1;
 }
 
+#ifdef _MSC_VER
+#	include <malloc.h>
+#	define ARRAY(type, name, size) type* name = (type*)_alloca((size) * sizeof(type))
+#else
+#	define ARRAY(type, name, size) type name[size]
+#endif
 
 static int
 _sock_recv(lua_State *L) {
     socket_t *sock = _getsock(L, 1);
     size_t len = (lua_Unsigned)luaL_optinteger(L, 2, RECV_BUFSIZE);
     ssize_t nread;
-	char buf[len];
+	ARRAY(char, buf, len);
 
     // printf("before recv %d -> socket_errno:%d\n", sock->fd, socket_errno);
     // socket_errno = 3;
     nread = recv(sock->fd, buf, len, 0);
     // printf("recv %d -> nread:%d socket_errno:%d\n", sock->fd, nread, socket_errno);
-    if(nread < 0) {
+    if(nread <0) {
         lua_pushnil(L);
         lua_pushinteger(L, socket_errno);
         return 2;
@@ -459,7 +467,7 @@ _sock_recvfrom(lua_State *L) {
 
 	socket_t *sock = _getsock(L, 1);
     size_t len = (lua_Unsigned)luaL_checkinteger(L, 2);
-	char buf[len];
+	ARRAY(char, buf, len);
 
     if(!_getsockaddrlen(sock, &addr_len)) {
         return luaL_argerror(L, 1, "bad family");
@@ -768,12 +776,12 @@ void os_init() {
     }
 }
 
-BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
-    if(fdwReason == DLL_PROCESS_ATTACH) {
-        os_init();
-    }
-    return TRUE;
-}
+// BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
+//     if(fdwReason == DLL_PROCESS_ATTACH) {
+//         os_init();
+//     }
+//     return TRUE;
+// }
 #endif
 
 

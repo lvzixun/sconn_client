@@ -2,7 +2,7 @@ local sconn = require "sconn"
 local socket = require "socket.c"
 local sleep = socket.sleep
 
-local sock, err = sconn.connect_host("127.0.0.1", 1248)
+local sock, err = sconn.connect_host("127.0.0.1", 1248, "test1")
 assert(sock, err)
 
 local count = 1

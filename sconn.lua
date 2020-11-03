@@ -141,26 +141,31 @@ local state = {
     },
 }
 
-local function switch_state(self, s)
+local function switch_state(self, s, ...)
     local v = state[s]
     assert(v)
-    log(">>>>>>>>>>>>>switch_state:", s)
+    log(">>>>>>>>>>>>>switch_state:", s, ...)
     self.v_state = v
     if v.request then
-        v.request(self)
+        v.request(self, ...)
     end
 end
 
 local out = {}
 
 -------------- new connect state ------------------
-function state.newconnect.request(self)
+function state.newconnect.request(self, target_server, flag)
     -- 0\n
     -- base64(DH_key)\n
-
+    -- targetServer\n
+    -- flag
+    
+    target_server = target_server or ""
+    flag = flag or 0
     local clientkey = crypt.randomkey()
-    local data = string.format("0\n%s\n",
-        crypt.base64encode(crypt.dhexchange(clientkey)))
+    local data = string.format("0\n%s\n%s\n%d",
+        crypt.base64encode(crypt.dhexchange(clientkey)),
+        target_server, flag)
 
     data = pack_data(data, 2, "big")
     self.v_sock:send(data)
@@ -362,7 +367,7 @@ function state.close.dispose(state_self, success, err, status)
 end
 
 
-local function connect(host, port)
+local function connect(host, port, targetserver, flag)
     local raw = {
         v_state = false,
         v_sock = false,
@@ -382,7 +387,6 @@ local function connect(host, port)
         v_send_buf = {},
         v_send_buf_top = 0,
 
-
         v_recv_buf = buffer_queue.create(),
     }
 
@@ -393,7 +397,7 @@ local function connect(host, port)
 
     raw.v_sock = sock
     local self = setmetatable(raw, {__index = mt})
-    switch_state(self, "newconnect")
+    switch_state(self, "newconnect", targetserver, flag)
     return self
 end
 
